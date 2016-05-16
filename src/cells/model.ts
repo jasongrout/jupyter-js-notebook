@@ -23,10 +23,6 @@ import {
 } from 'phosphor-signaling';
 
 import {
-  IInputAreaModel
-} from '../input-area';
-
-import {
   CellType, OutputType
 } from '../notebook/nbformat';
 
@@ -53,19 +49,9 @@ interface IBaseCellModel extends IDisposable {
   type: CellType;
 
   /**
-   * The cell's name. If present, must be a non-empty string.
-   */
-  name?: string;
-
-  /**
-   * The cell's tags. Tags must be unique, and must not contain commas.
-   */
-  tags?: string[];
-
-  /**
    * A signal emitted when state of the cell changes.
    */
-  stateChanged: ISignal<IBaseCellModel, IChangedArgs<any>>;
+  contentChanged: ISignal<IBaseCellModel, IChangedArgs<any>>;
 
   /**
    * A signal emitted when a user metadata state changes.
@@ -73,12 +59,14 @@ interface IBaseCellModel extends IDisposable {
   metadataChanged: ISignal<IBaseCellModel, string>;
 
   /**
-   * The input area of the cell.
-   *
-   * #### Notes
-   * This is a read-only property.
+   * The source of the cell.
    */
-  input: IInputAreaModel;
+  source: string;
+
+  /**
+   * Tags for a cell.
+   */
+  tags: string[];
 
   /**
    * Whether the cell is trusted.
@@ -156,10 +144,6 @@ interface IRawCellModel extends IBaseCellModel {
  */
 export
 interface IMarkdownCellModel extends IBaseCellModel {
-  /**
-   * Whether the cell is rendered.
-   */
-  rendered: boolean;
 }
 
 
@@ -181,8 +165,7 @@ class BaseCellModel implements IBaseCellModel {
   /**
    * Construct a new base cell model.
    */
-  constructor(input: IInputAreaModel) {
-    this._input = input;
+  constructor() {
   }
 
   /**
@@ -203,10 +186,20 @@ class BaseCellModel implements IBaseCellModel {
   }
 
   /**
-   * Get the input area model.
+   * The source of the cell.
    */
-  get input(): IInputAreaModel {
-    return this._input;
+  get source(): string {
+    return this._source;
+  }
+  
+  set source(newValue: string) {
+    if (newValue === this._source) {
+      return;
+    }
+    let oldValue = this._source;
+    this._source = newValue;
+    let name = 'source';
+    this.stateChanged.emit({name, oldValue, newValue});
   }
 
   /**
@@ -267,7 +260,7 @@ class BaseCellModel implements IBaseCellModel {
    * This is a read-only property.
    */
   get isDisposed(): boolean {
-    return this._input === null;
+    return true;
   }
 
   /**
@@ -279,8 +272,7 @@ class BaseCellModel implements IBaseCellModel {
       return;
     }
     clearSignalData(this);
-    this._input.dispose();
-    this._input = null;
+    this._disposed = true;
   }
 
   /**
@@ -335,9 +327,10 @@ class BaseCellModel implements IBaseCellModel {
   /**
    * The type of cell.
    */
-  type: CellType;
+  public type: CellType;
 
-  private _input: IInputAreaModel = null;
+  private _disposed: boolean = false;
+  private _source: string = null;
   private _tags = '[]';
   private _name: string = null;
   private _trusted = false;
@@ -354,10 +347,9 @@ class CodeCellModel extends BaseCellModel implements ICodeCellModel {
   /**
    * Construct a new code cell model.
    */
-  constructor(input: IInputAreaModel, output: IOutputAreaModel) {
-    super(input);
+  constructor(output: IOutputAreaModel) {
+    super();
     this._output = output;
-    this.input.prompt = '';
   }
 
   /**
@@ -379,7 +371,6 @@ class CodeCellModel extends BaseCellModel implements ICodeCellModel {
     }
     let prev = this._executionCount;
     this._executionCount = value;
-    this.input.prompt = `${value || ''}`;
     this.stateChanged.emit({
       name: 'executionCount',
       oldValue: prev,
@@ -443,7 +434,6 @@ class CodeCellModel extends BaseCellModel implements ICodeCellModel {
   clear(): void {
     this.output.clear(false);
     this.executionCount = null;
-    this.input.prompt = '';
   }
 
   /**
@@ -469,27 +459,9 @@ class CodeCellModel extends BaseCellModel implements ICodeCellModel {
  */
 export
 class MarkdownCellModel extends BaseCellModel implements IMarkdownCellModel {
-  /**
-   * Whether we should display a rendered representation.
-   */
-  get rendered() {
-    return this._rendered;
-  }
-  set rendered(value: boolean) {
-    if (this._rendered === value) {
-      return;
-    }
-    let prev = this._rendered;
-    this._rendered = value;
-    this.stateChanged.emit({
-      name: 'rendered',
-      oldValue: prev,
-      newValue: value
-    });
-  }
-
   type: CellType = 'markdown';
-  private _rendered = true;
+  
+  // TODO: support attachments
 }
 
 
@@ -501,9 +473,8 @@ class RawCellModel extends BaseCellModel implements IRawCellModel {
   /**
    * Construct a new raw cell model.
    */
-  constructor(input: IInputAreaModel) {
-    super(input);
-    input.textEditor.mimetype = 'text/plain';
+  constructor() {
+    super();
   }
 
   /**
@@ -524,59 +495,15 @@ class RawCellModel extends BaseCellModel implements IRawCellModel {
       newValue: value
     });
   }
+  
+  // TODO: support attachments
 
   type: CellType = 'raw';
   private _format: string = null;
 }
 
-
-/**
- * Execute the code cell using the given kernel.
- */
-export
-function executeCodeCell(cell: ICodeCellModel, kernel: IKernel): Promise<void> {
-  let input = cell.input;
-  let output = cell.output;
-  let text = input.textEditor.text.trim();
-  cell.clear();
-  if (text.length === 0) {
-    return Promise.resolve(void 0);
-  }
-  input.prompt = '*';
-  return executeCode(text, kernel, output).then(reply => {
-    cell.executionCount = reply.execution_count;
-  });
-}
-
-
-/**
- * Execute code and send outputs to an output area.
- */
-export
-function executeCode(code: string, kernel: IKernel, outputArea: IOutputAreaModel): Promise<IExecuteReply> {
-  let exRequest = {
-    code,
-    silent: false,
-    store_history: true,
-    stop_on_error: true,
-    allow_stdin: true
-  };
-  outputArea.clear(false);
-  return new Promise<IExecuteReply>((resolve, reject) => {
-    let future = kernel.execute(exRequest);
-    future.onIOPub = (msg => {
-      let model = msg.content;
-      if (model !== void 0) {
-        model.output_type = msg.header.msg_type as OutputType;
-        outputArea.add(model);
-      }
-    });
-    future.onReply = (msg => {
-      resolve(msg.content as IExecuteReply);
-    });
-  });
-}
-
+// These next few is* functions can be eliminated when typescript gets smarter
+// type inference.
 
 /**
   * A type guard for testing if a cell model is a markdown cell.

@@ -163,6 +163,11 @@ interface IRawCell extends IBaseCell {
    * Cell-level metadata.
    */
   metadata: IRawCellMetadata;
+
+  /**
+   * Attachments for use in cell content.
+   */
+  attachments: {[filename: string]: MimeBundle}
 }
 
 
@@ -175,6 +180,11 @@ interface IMarkdownCell extends IBaseCell {
    * String identifying the type of cell.
    */
   cell_type: 'markdown';
+
+  /**
+   * Attachments for use in cell content.
+   */
+  attachments: {[filename: string]: MimeBundle}
 }
 
 
